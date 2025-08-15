@@ -71,7 +71,7 @@ def scrap():
     get_all_pages = False
     i = 0
     data = []
-    print(f"url: {template_url}")
+    
 
     while not get_all_pages:
         i += 1
@@ -87,7 +87,7 @@ def scrap():
             get_all_pages = True
 
         time.sleep(5)
-
+    print(f"url: {url}")
     def scrapJobsGe(rows):
         all_jobs = {}
         for index, row in enumerate(rows, start=0):
