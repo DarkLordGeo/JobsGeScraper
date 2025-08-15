@@ -34,6 +34,6 @@ Any type of contribution is welcome.
 
 ### Screenshots
 
-!(https://github.com/DarkLordGeo/JobsGeScraper/blob/main/imgs/image_1.png)
+![screenshot: ](https://github.com/DarkLordGeo/JobsGeScraper/blob/main/imgs/image_1.png)
 
 
