@@ -33,7 +33,4 @@ Python 3.12.6
 Any type of contribution is welcome.
 
 
-## About me
-
-I am a front-end developer with experience in React and am currently expanding into full-stack development with Django. I am also exploring Python for web scraping and data-focused projects.
 
