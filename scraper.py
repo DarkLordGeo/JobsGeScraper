@@ -89,10 +89,8 @@ def scrap():
         time.sleep(5)
 
     def scrapJobsGe(rows):
-        # soup = BeautifulSoup(data, "html.parser")
         all_jobs = {}
         for index, row in enumerate(rows, start=0):
-            # print('jobs scraped:', index)
             # loop over html table , start at 0, keep track of index and rows
             tds = row.find_all("td")
             # find all table data
@@ -111,8 +109,6 @@ def scrap():
                 # appending job_anchor href attribute skipping 0
 
                 for job_link in job_anchors:
-                    # time.sleep(1.5)
-                    # print("request made")
 
                     job_desc_url = requests.get(f"https://www.jobs.{job_link}")
                     # making requests to each job description url by formatting string, having it in loop makes it to try every possible appended element to job_anchor and passing job_link to request.get
@@ -211,9 +207,7 @@ def scrap():
                                         "job_start_date": data[2],
                                         "job_expire_date": data[3],
                                         "job_description": english_desc_json,
-                                        # "job_url":english_job_desc_url
                                     }
-                                    # print(english_job_desc_url)
                                     job_data = {"jobs": all_jobs}
                                     with open(
                                         "jobs.json", "w", encoding="utf-8"
