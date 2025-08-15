@@ -106,8 +106,10 @@ github: https://github.com/DarkLordGeo
                 # appending job_anchor href attribute skipping 0
 
                 for job_link in job_anchors:
-
+                    
+                    
                     job_desc_url = requests.get(f"https://www.jobs.{job_link}")
+                    time.sleep(5)
                     # making requests to each job description url by formatting string, having it in loop makes it to try every possible appended element to job_anchor and passing job_link to request.get
 
                     job_desc_text = job_desc_url.text
@@ -172,6 +174,7 @@ github: https://github.com/DarkLordGeo
                                 english_job_desc_url = requests.get(
                                     f"https://jobs.ge/{english_anchor_here}"
                                 )
+                                time.sleep(5)
                                 english_job_desc_url_text = english_job_desc_url.text
 
                                 if english_job_desc_url.status_code != 200:
