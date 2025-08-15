@@ -32,5 +32,8 @@ Python 3.12.6
 
 Any type of contribution is welcome.
 
+### Screenshots
+
+![https://github.com/DarkLordGeo/JobsGeScraper/blob/main/imgs/image_1.png]
 
 
