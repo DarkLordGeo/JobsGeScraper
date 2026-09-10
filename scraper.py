@@ -1,266 +1,221 @@
-from bs4 import BeautifulSoup
-import requests
+"""Interactive CLI scraper for jobs.ge.
+
+Prompts for a category, then scrapes every listing in it into jobs.json.
+Output schema (jobs.json is a plain JSON array, one entry per job):
+
+    {
+        "job_id": "672911",
+        "company": "...",
+        "position": "...",
+        "date": ["<start>", "<expiry>"],
+        "desciption": ["<full description text>"],
+        "job_link": "https://www.jobs.ge/ge/?view=jobs&id=672911"
+    }
+
+This mirrors the scraping logic in DarkLordGeo/ITJobsBackend's devjobs.py,
+which scrapes the IT/Programming category on an automated daily schedule.
+The two are kept in sync by hand since they live in separate repos with
+different entry points (this one is interactive; that one runs unattended).
+"""
+
 import json
 import time
+from urllib.parse import urljoin, urlparse, parse_qs
+
+import requests
+from bs4 import BeautifulSoup
+
+BASE_URL = "https://www.jobs.ge"
+REQUEST_TIMEOUT = 15
+PAGE_DELAY_SECONDS = 5
+DETAIL_DELAY_SECONDS = 1.5
+FULL_PAGE_ROW_COUNT = 300
+APPLY_LINK_TEXT = "აქ"
+ENGLISH_LINK_TEXT = "ინგლისურ ენაზე"
+JOBS_FILE = "jobs.json"
+
+# (category label, jobs.ge category id) - order matches the site's own menu.
+CATEGORIES = [
+    ("ადმინისტრაცია/მენეჯმენტი", 1),
+    ("ფინანსები/სტატისტიკა", 3),
+    ("გაყიდვები", 2),
+    ("PR/მარკეტინგი", 4),
+    ("ზოგადი ტექნიკური პერსონალი", 18),
+    ("ლოგისტიკა/ტრანსპორტი/დისტრიბუცია", 5),
+    ("მშენებლობა/რემონტი", 11),
+    ("დასუფთავება", 16),
+    ("დაცვა/უსაფრთხოება", 17),
+    ("IT/პროგრამირება", 6),
+    ("მედია/გამომცემლობა", 13),
+    ("განათლება", 12),
+    ("სამართალი", 7),
+    ("მედიცინა/ფარმაცია", 8),
+    ("სილამაზე/მოდა", 14),
+    ("კვება", 10),
+    ("სხვა", 9),
+]
+
+
+def print_logo():
+    print(
+        r"""
+      __   __   __      __   __   __
+   | /  \ |__) /__`    /__` /  ` |__)  /\  |__) |__  |__)
+\__/ \__/ |__) .__/    .__/ \__, |  \ /~~\ |    |___ |  \
+
+github: https://github.com/DarkLordGeo
+        """
+    )
+
+
+def prompt_category():
+    for index, (label, _cid) in enumerate(CATEGORIES):
+        print(index, label)
+
+    choice = int(input("Choose which category you want to scrape: "))
+    label, cid = CATEGORIES[choice]
+    template_url = (
+        f"https://www.jobs.ge/?page={{page}}&q=&cid={cid}&lid=0&jid=0"
+        "&in_title=0&has_salary=0&is_ge=0&for_scroll=yes"
+    )
+    return label, template_url
+
+
+def get_soup(url):
+    """GET a URL and parse it, returning None (and logging) on any failure."""
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"Failed to fetch {url}: {exc}")
+        return None
+    return BeautifulSoup(response.text, "html.parser")
+
+
+def fetch_listing_rows(template_url):
+    """Fetch every listing page until a short page signals the last one."""
+    rows = []
+    page = 0
+    while True:
+        page += 1
+        soup = get_soup(template_url.format(page=page))
+        if soup is None:
+            break
+
+        page_rows = soup.find_all("tr")
+        rows.extend(page_rows)
+        print(f"Accessed page {page} ({len(page_rows)} rows)")
+
+        if len(page_rows) < FULL_PAGE_ROW_COUNT:
+            print(f"End of job listing found on page {page}, saving...")
+            break
+        time.sleep(PAGE_DELAY_SECONDS)
+
+    return rows
+
+
+def extract_job_id(href):
+    """Pull the numeric jobs.ge job id out of a listing anchor's href."""
+    query = parse_qs(urlparse(href).query)
+    return query.get("id", [None])[0]
+
+
+def fetch_description(detail_url):
+    """Return a job's description text.
+
+    Follows the "view in English" link when a posting only exposes one, and
+    returns None for postings that only link out to an external application
+    form (nothing to scrape) or when the page can't be fetched/parsed.
+    """
+    soup = get_soup(detail_url)
+    if soup is None:
+        return None
+
+    dtable = soup.find("table", {"class": "dtable"})
+    if dtable is None:
+        return None
+
+    anchors = dtable.find_all("a")
+
+    if len(anchors) == 2 and anchors[-1].get_text(strip=True) == APPLY_LINK_TEXT:
+        return None
+
+    if len(anchors) == 2 and anchors[-1].get_text(strip=True) == ENGLISH_LINK_TEXT:
+        english_url = urljoin(BASE_URL, anchors[-1].get("href", ""))
+        soup = get_soup(english_url)
+        dtable = soup.find("table", {"class": "dtable"}) if soup else None
+
+    if dtable is None:
+        return None
+
+    rows = dtable.find_all("tr")
+    return rows[-1].get_text() if rows else None
+
+
+def parse_row(row):
+    """Turn one listing <tr> into a job record, or None if it isn't one."""
+    tds = row.find_all("td")
+    if len(tds) < 6:
+        return None
+
+    anchor = row.find("a")
+    href = anchor.get("href") if anchor else None
+    if not href:
+        return None
+
+    job_id = extract_job_id(href)
+    if job_id is None:
+        return None
+
+    fields = [td.get_text(strip=True) for td in tds if td.get_text(strip=True)]
+    if len(fields) < 4:
+        return None
+
+    company, position, start_date, expire_date = fields[:4]
+
+    return {
+        "job_id": job_id,
+        "company": company,
+        "position": position,
+        "date": [start_date, expire_date],
+        "job_link": urljoin(BASE_URL, href),
+    }
+
+
+def write_jobs(jobs_by_id, path=JOBS_FILE):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(list(jobs_by_id.values()), file, ensure_ascii=False, indent=2)
+
+
+def scrape_category(template_url, delay_between_jobs=DETAIL_DELAY_SECONDS):
+    """Scrape every listing behind template_url, writing jobs.json after each
+    job so a crash partway through a run still leaves usable progress."""
+    jobs_by_id = {}
+
+    for row in fetch_listing_rows(template_url):
+        record = parse_row(row)
+        if record is None:
+            continue
+
+        description = fetch_description(record["job_link"])
+        record["desciption"] = [description] if description else []
+
+        jobs_by_id[record["job_id"]] = record
+        write_jobs(jobs_by_id)
+        print(f"jobs scraped: {len(jobs_by_id)}")
+
+        if delay_between_jobs:
+            time.sleep(delay_between_jobs)
+
+    return jobs_by_id
 
 
 def main():
-    def logo():
-        print(
-            f"""
-      __   __   __      __   __   __        __   __   __    
-   | /  \ |__) /__`    /__` /  ` |__)  /\  |__) |__  |__) 
-\__/ \__/ |__) .__/    .__/ \__, |  \ /~~\ |    |___ |  \ 
-                                                          
-                                                            
-github: https://github.com/DarkLordGeo
-        """
-        )
-
-    logo()
-
-    def userInput():
-        user_choices = [
-            "ადმინისტრაცია/მენეჯმენტი",
-            "ფინანსები/სტატისტიკა",
-            "გაყიდვები",
-            "PR/მარკეტინგი",
-            "ზოგადი ტექნიკური პერსონალი",
-            "ლოგისტიკა/ტრანსპორტი/დისტრიბუცია",
-            "მშენებლობა/რემონტი",
-            "დასუფთავება",
-            "დაცვა/უსაფრთხოება",
-            "IT/პროგრამირება",
-            "მედია/გამომცემლობა",
-            "განათლება",
-            "სამართალი",
-            "მედიცინა/ფარმაცია",
-            "სილამაზე/მოდა",
-            "კვება",
-            "სხვა",
-        ]
-
-        job_links = [
-            "https://www.jobs.ge/?page={page}&q=&cid=1&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=3&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=2&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=4&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=18&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=5&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=11&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=16&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=17&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=6&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=13&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=12&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=7&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=8&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=14&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=10&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-            "https://www.jobs.ge/?page={page}&q=&cid=9&lid=0&jid=0&in_title=0&has_salary=0&is_ge=0&for_scroll=yes",
-        ]
-        for index, x in enumerate(user_choices):
-            print(index, x)
-        user_input = int(input("Choose which category you want to scrape: "))
-        return job_links[user_input]
-
-    template_url = userInput()
-    get_all_pages = False
-    i = 0
-    data = []
-
-    while not get_all_pages:
-        i += 1
-        url = template_url.format(page=i)
-        req = requests.get(url)
-        soup = BeautifulSoup(req.text, "html.parser")
-        rows = soup.find_all("tr")
-        data.extend(rows)
-        # if there is less than 300 listing on page stop accessing it
-        print(f"Accessed page {i}")
-        if len(rows) < 300:
-            print(f"End of job listing was found on {i}, Starting to store data...")
-            get_all_pages = True
-
-        time.sleep(5)
-    print(f"url: {url}")
-
-    def scrapJobsGe(rows):
-        all_jobs = {}
-        for index, row in enumerate(rows, start=0):
-            # loop over html table , start at 0, keep track of index and rows
-            tds = row.find_all("td")
-            # find all table data
-
-            job_anchor = row.find("a")
-            # get anchor of current job , find method finds first occurance of anchor
-
-            job_anchors = []
-            # define list to store job anchors
-
-            if job_anchor:
-                # if job link exists than we should start scraping
-
-                job_anchors.append(job_anchor.get("href")[1:])
-
-                # appending job_anchor href attribute skipping 0
-
-                for job_link in job_anchors:
-                    
-                    
-                    job_desc_url = requests.get(f"https://www.jobs.{job_link}")
-                    time.sleep(5)
-                    # making requests to each job description url by formatting string, having it in loop makes it to try every possible appended element to job_anchor and passing job_link to request.get
-
-                    job_desc_text = job_desc_url.text
-                    # getting text
-
-                    soup = BeautifulSoup(job_desc_text, "html.parser")
-                    # parsing job description
-
-                    job_desc_anchor = soup.find("table", {"class": "dtable"}).find_all(
-                        "a"
-                    )
-
-                    # searching for html table with class of dtable and searching for all anchors
-
-                    if len(job_desc_anchor) == 2 and job_desc_anchor[-1].text == "აქ":
-                        # costum logic for existing anchors on webpage. In this situation we aim for 'აქ' text
-
-                        for anchor in job_desc_anchor:
-                            anchor_here = anchor.get("href")
-                            if len(tds) < 6:
-                                continue
-                            data = [
-                                td.get_text(strip=True)
-                                for td in tds
-                                if td.get_text(strip=True)
-                            ]
-                            if len(data) < 4:
-                                continue
-                            all_jobs[f"job_{index}"] = {
-                                "job_position": data[0],
-                                "job_company": data[1],
-                                "job_start_date": data[2],
-                                "job_expire_date": data[3],
-                                "job_link": anchor_here,
-                                # "job_url":job_desc_url
-                            }
-                            # job data dictionary
-                            job_data = {"jobs": all_jobs}
-
-                            with open("jobs.json", "w", encoding="utf-8") as write_file:
-                                json.dump(
-                                    job_data,
-                                    write_file,
-                                    ensure_ascii=False,
-                                    indent=4,
-                                )
-                                # print(len(all_jobs))
-                            # opening jobs.json file.
-                            # using json dump
-
-                    # english text vacancies
-
-                    if (
-                        len(job_desc_anchor) == 2
-                        and job_desc_anchor[-1].text == "ინგლისურ ენაზე"
-                    ):
-                        for english_anchor in job_desc_anchor:
-                            english_anchor_here = english_anchor.get("href")
-                            # print(english_anchor_here)
-
-                            try:
-                                english_job_desc_url = requests.get(
-                                    f"https://jobs.ge/{english_anchor_here}"
-                                )
-                                time.sleep(5)
-                                english_job_desc_url_text = english_job_desc_url.text
-
-                                if english_job_desc_url.status_code != 200:
-                                    print("failed to fetch")
-                                    continue
-
-                                englishSoup = BeautifulSoup(
-                                    english_job_desc_url_text, "html.parser"
-                                )
-                                english_desc_last_tr = englishSoup.find(
-                                    "table", class_="dtable"
-                                ).find_all("tr")
-
-                                if english_desc_last_tr:
-                                    english_desc_json = english_desc_last_tr[-1].text
-
-                                    if len(tds) < 6:
-                                        continue
-                                    data = [
-                                        td.get_text(strip=True)
-                                        for td in tds
-                                        if td.get_text(strip=True)
-                                    ]
-                                    if len(data) < 4:
-                                        continue
-
-                                    all_jobs[f"job_{index}"] = {
-                                        "job_position": data[0],
-                                        "job_company": data[1],
-                                        "job_start_date": data[2],
-                                        "job_expire_date": data[3],
-                                        "job_description": english_desc_json,
-                                    }
-                                    job_data = {"jobs": all_jobs}
-                                    with open(
-                                        "jobs.json", "w", encoding="utf-8"
-                                    ) as write_file:
-                                        json.dump(
-                                            job_data,
-                                            write_file,
-                                            ensure_ascii=False,
-                                            indent=4,
-                                        )
-
-                                else:
-                                    print(
-                                        "no tables with dtable class found on this page"
-                                    )
-
-                            except Exception as e:
-                                print(e)
-
-                    else:
-                        job_desc_last_tr = soup.find(
-                            "table", {"class": "dtable"}
-                        ).find_all("tr")
-                        job_desc_json = job_desc_last_tr[-1].text
-
-                        if len(tds) < 6:
-                            continue
-
-                        data = [
-                            td.get_text(strip=True)
-                            for td in tds
-                            if td.get_text(strip=True)
-                        ]
-
-                        if len(data) < 4:
-                            continue
-
-                        all_jobs[f"job_{index}"] = {
-                            "job_position": data[0],
-                            "job_company": data[1],
-                            "job_start_date": data[2],
-                            "job_expire_date": data[3],
-                            "job_description": job_desc_json,
-                            "job_url": f"https://www.jobs.{job_link}",
-                        }
-                        job_data = {"jobs": all_jobs}
-                        print("jobs scraped: ", len(all_jobs))
-                        with open("jobs.json", "w", encoding="utf-8") as write_file:
-                            json.dump(
-                                job_data, write_file, ensure_ascii=False, indent=4
-                            )
-
-    scrapJobsGe(data)
+    print_logo()
+    label, template_url = prompt_category()
+    print(f"Scraping category: {label}")
+    jobs = scrape_category(template_url)
+    print(f"Done. Saved {len(jobs)} jobs to {JOBS_FILE}")
 
 
 if __name__ == "__main__":
