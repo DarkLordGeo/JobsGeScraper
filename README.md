@@ -60,6 +60,35 @@ Note: scraping fetches every job's description page with a 5s delay each
 (to respect jobs.ge's `robots.txt` crawl-delay), so a large category can
 take a while to scrape — size the notify workflow's schedule accordingly.
 
+### Using your own fork
+
+GitHub never copies secrets into a fork, so forking this repo does **not**
+give anyone access to the original bot's token, and running the fork's
+own scheduled workflows never touches the upstream repo's subscribers or
+snapshots — each fork is fully independent. To run your own instance:
+
+1. Fork the repo.
+2. Open your fork's **Actions** tab and click **"I understand my
+   workflows, go ahead and enable them"** — GitHub disables Actions on
+   forks by default.
+3. Create your own bot with [@BotFather](https://t.me/BotFather) and copy
+   its token.
+4. In your fork, go to **Settings → Secrets and variables → Actions →
+   New repository secret**, name it `TELEGRAM_BOT_TOKEN`, and paste your
+   token.
+5. That's it — the workflows pick it up on their next scheduled run (or
+   trigger one immediately from the Actions tab). Your fork builds up its
+   own `data/subscribers.json` and `data/snapshots/`, separate from
+   upstream.
+
+If Actions are enabled but the secret hasn't been added yet, both
+workflows detect that and skip with a warning instead of failing.
+
+Two things to keep in mind either way (not fork-specific, just how GitHub
+Actions works): scheduled workflows only fire from the repository's
+**default branch**, and GitHub auto-disables `schedule` triggers after
+**60 days** with no commits to the repo — push anything to re-enable them.
+
 
 ### Contributions
 
