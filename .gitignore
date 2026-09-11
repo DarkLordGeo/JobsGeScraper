@@ -1,3 +1,5 @@
 /jobs.json
 /test.py
 /venv
+__pycache__/
+*.pyc
