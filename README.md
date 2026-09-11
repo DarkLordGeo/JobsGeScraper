@@ -84,6 +84,29 @@ snapshots — each fork is fully independent. To run your own instance:
 If Actions are enabled but the secret hasn't been added yet, both
 workflows detect that and skip with a warning instead of failing.
 
+### Keeping your fork up to date
+
+Once your fork's workflows have run at least once, they'll have
+committed to `data/subscribers.json`/`data/snapshots/`, which puts your
+fork's `main` branch **ahead** of the upstream repo. That's expected —
+but it also means GitHub's one-click "Sync fork" button (top of your
+fork's page) may stop offering a plain fast-forward and instead show
+"Discard commits" — **don't use that**, it deletes your subscriber data.
+
+Pull in upstream changes with a real merge instead, which is safe here
+because your commits only ever touch `data/`, while upstream changes only
+ever touch code/docs — the two essentially never conflict:
+
+```
+git remote add upstream https://github.com/DarkLordGeo/JobsGeScraper.git   # one-time
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+Do this whenever you want the latest scraper/bot code, on whatever
+cadence suits you — there's no automatic sync, from either side.
+
 Two things to keep in mind either way (not fork-specific, just how GitHub
 Actions works): scheduled workflows only fire from the repository's
 **default branch**, and GitHub auto-disables `schedule` triggers after
